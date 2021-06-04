@@ -1,0 +1,234 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Provisions resources used to identify latest IIS 10 AMI ID and to trigger Image Builder pipeline when AMI ID changes.
+Parameters:
+  ParentImage:
+    Type: AWS::EC2::Image::Id
+    Description: Image ID to use as the initial parent for Image Builder Recipe.
+    Default: ami-0e57d7d50cc5fde4b
+Resources:
+  # Need to update component to ensure that SSM Agent is at least v3.0.1031.0. This avoids a problem where execution of SSM doc failed with "Cannot open specified log file" even though task completed successfully.
+  UpdateSsmAgentComponent:
+    Type: AWS::ImageBuilder::Component
+    Properties:
+      Name: UpdateSsmAgent
+      Description: Updates the SSM agent on the target instance.
+      Platform: Windows
+      Version: 1.0.0
+      ChangeDescription: Initial version
+      Data: |
+        name: update-ssm-agent
+        description: This ensure that the latest SSM agent is installed on the server
+        schemaVersion: 1.0
+
+        phases:
+          - name: build
+            steps:
+              - name: update-ssm-agent
+                action: ExecutePowerShell
+                inputs:
+                  commands:
+                    - Invoke-WebRequest "https://s3.amazonaws.com/ec2-downloads-windows/SSMAgent/latest/windows_amd64/AmazonSSMAgentSetup.exe" -OutFile $env:TEMP\SSMAgent_latest.exe
+                    - Start-Process -FilePath $env:TEMP\SSMAgent_latest.exe -ArgumentList "/S"
+                    - rm -Force $env:TEMP\SSMAgent_latest.exe
+              - name: reboot
+                action: Reboot
+  GoldenImageRecipe:
+    Type: AWS::ImageBuilder::ImageRecipe
+    Properties: 
+      Name: "demo-beanstalk-image"
+      Description: Demo Beanstalk Image
+      Components: 
+      - ComponentArn: !Ref UpdateSsmAgentComponent
+      - ComponentArn: arn:aws:imagebuilder:us-east-1:aws:component/update-windows/x.x.x
+      - ComponentArn: arn:aws:imagebuilder:us-east-1:aws:component/stig-build-windows-medium/x.x.x
+      ParentImage: !Ref ParentImage
+      WorkingDirectory: C:\
+      Version: 1.0.0
+  BuildImageRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: ec2.amazonaws.com
+          Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+        - arn:aws:iam::aws:policy/EC2InstanceProfileForImageBuilderECRContainerBuilds
+        - arn:aws:iam::aws:policy/EC2InstanceProfileForImageBuilder
+  BuildImageInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref BuildImageRole
+  InfrastructureConfiguration:
+    Type: AWS::ImageBuilder::InfrastructureConfiguration
+    Properties:
+      Name: DefaultVpc
+      Description: Configuare Image Builder instance to run in default VPC
+      InstanceProfileName: !Ref BuildImageInstanceProfile
+      InstanceTypes:
+        - t3.medium
+        - t3.large
+        - t2.medium
+        - t2.large
+  GoldenImageDistributionConfiguration:
+    Type: AWS::ImageBuilder::DistributionConfiguration
+    Properties:
+      Name: DemoWindowsBeanstalkImage
+      Description: Distributes the AMI to the same region as CloudFormation Stack used to create the distribution configuration.
+      Distributions:
+        - Region: !Sub ${AWS::Region} 
+          AmiDistributionConfiguration: 
+            Name: DemoWindowsBeanstalkImage-{{ imagebuilder:buildDate }}
+  WindowsBeanstalkImagePipeline:
+    Type: AWS::ImageBuilder::ImagePipeline
+    Properties:
+      Name: WindowsBeanstalkImagePipeline
+      Description: Customizes Beanstalk Managed Windows AMI and outputs new golden image.
+      InfrastructureConfigurationArn: !Ref InfrastructureConfiguration
+      ImageRecipeArn: !Ref GoldenImageRecipe
+  AmiMonitorDlq:
+    Type: AWS::SQS::Queue
+  AmiMonitor:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: BeanstalkManagedAmiMonitor
+      PackageType: Image
+      ImageConfig:
+        EntryPoint:
+        - "/lambda-entrypoint.sh"
+        Command:
+        - BeanstalkImageBuilderPipeline::BeanstalkImageBuilderPipeline.AmiMonitor::Handler
+      ImageUri: ''
+      MemorySize: 128
+      Timeout: 30
+      Environment:
+        Variables:
+          PLATFORM_ARN: !Sub arn:${AWS::Partition}:elasticbeanstalk:${AWS::Region}::platform/IIS 10.0 running on 64bit Windows Server 2019/2.6.5
+          SSM_PARAMETER_NAME: !Ref LatestBeanstalkAmiIdParameter
+      Policies:
+      - AWSLambdaBasicExecutionRole
+      - Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Action:
+          - elasticbeanstalk:DescribePlatformVersion
+          Resource: 
+            - !Sub arn:${AWS::Partition}:elasticbeanstalk:${AWS::Region}::platform/IIS 10.0 running on 64bit Windows Server 2019/2.6.5
+        - Effect: Allow
+          Action:
+          - ssm:PutParameter
+          - ssm:GetParameter
+          Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${LatestBeanstalkAmiIdParameter}
+      Events:
+        DailySchedule:
+          Type: Schedule
+          Properties:
+            Description: Triggers Lambda function used to determine if AMI for Beanstalk platform has been updated.
+            Schedule: "rate(1 day)"
+            DeadLetterConfig:
+              Arn: !GetAtt AmiMonitorDlq.Arn
+      DeadLetterQueue:
+        Type: SQS
+        TargetArn: !GetAtt AmiMonitorDlq.Arn
+    Metadata:
+      Dockerfile: Dockerfile
+      DockerContext: "."
+      DockerTag: "latest"
+  ImageBuilderTriggerDlq:
+    Type: AWS::SQS::Queue
+  ImageBuilderTrigger:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: ImageBuilderTrigger
+      PackageType: Image
+      ImageConfig:
+        EntryPoint:
+        - "/lambda-entrypoint.sh"
+        Command:
+        - BeanstalkImageBuilderPipeline::BeanstalkImageBuilderPipeline.ImageBuilderTrigger::Handler
+      ImageUri: ''
+      MemorySize: 128
+      Timeout: 30
+      Environment:
+        Variables:
+          IMAGE_PIPELINE_ARN: !Ref WindowsBeanstalkImagePipeline
+      Policies:
+      - AWSLambdaBasicExecutionRole
+      - Id: allow-create-recipe
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Action:
+          - imagebuilder:GetImageRecipe
+          - imagebuilder:CreateImageRecipe
+          - imagebuilder:TagResource
+          Resource: !Sub "arn:${AWS::Partition}:imagebuilder:${AWS::Region}:${AWS::AccountId}:image-recipe/${GoldenImageRecipe.Name}/*"
+      - Id: allow-create-pipeline
+        Version: '2012-10-17'
+        Statement:
+        - Sid: AllowGetComponent
+          Effect: Allow
+          Action:
+          - imagebuilder:GetComponent
+          Resource: !Sub "arn:${AWS::Partition}:imagebuilder:${AWS::Region}:*:component/*"
+        - Sid: AllowGetParentImage
+          Effect: Allow
+          Action: 
+          - imagebuilder:GetImage
+          - ec2:DescribeImages
+          Resource: '*'
+        - Sid: AllowStartImagePipeline
+          Effect: Allow
+          Action:
+          - imagebuilder:StartImagePipelineExecution
+          - imagebuilder:GetImagePipeline
+          - imagebuilder:UpdateImagePipeline
+          Resource: !Ref WindowsBeanstalkImagePipeline
+        - Sid: AllowGetConfiguration
+          Effect: Allow
+          Action: 
+          - imagebuilder:GetInfrastructureConfiguration
+          - imagebuilder:GetDistributionConfiguration
+          Resource: '*'
+        - Sid: AllowCreateServiceLinkedRole
+          Effect: Allow
+          Action: iam:CreateServiceLinkedRole
+          Resource: '*'
+        - Sid: AllowParameterRead
+          Effect: Allow
+          Action: ssm:GetParameter
+          Resource: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${LatestBeanstalkAmiIdParameter}"
+      Events:
+        ParamStoreChange:
+          Type: EventBridgeRule
+          Properties:
+            DeadLetterConfig:
+              Arn: !GetAtt AmiMonitorDlq.Arn
+            Pattern:
+                source: [ "aws.ssm" ]
+                detail-type: [ "Parameter Store Change" ]
+                resources: [ !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${LatestBeanstalkAmiIdParameter}" ]
+      DeadLetterQueue:
+        Type: SQS
+        TargetArn: !GetAtt ImageBuilderTriggerDlq.Arn
+    Metadata:
+      Dockerfile: Dockerfile
+      DockerContext: "."
+      DockerTag: "latest"
+  LatestBeanstalkAmiIdParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Type: String
+      Name: /elastic-beanstalk/service/ami-windows-latest/IIS_10.0_running_on_64bit_Windows_Server_2019-2.6.5/image_id
+      Description: !Sub Latest Amazon Machine Image ID in ${AWS::Region} for IIS 10.0 running on 64bit Windows Server 2019/2.6.5
+      # Using a dummy AMI ID here so that the first time the AmiMonitor Lambda function executes, it will update the parameter
+      # Triggering the ImageBuilderTrigger Lambda function so that the EC2 Image Builder pipeline gets started.
+      Value: "ami-xxxxxxxx"
