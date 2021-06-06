@@ -23,6 +23,8 @@ Additionally, this project installs the following software for the purposes of d
       - [ImageBuilderTrigger](#imagebuildertrigger)
   - [Design](#design)
     - [Static Relationships](#static-relationships)
+      - [Namespaces](#namespaces)
+      - [Classes](#classes)
     - [Dynamic Behavior](#dynamic-behavior)
       - [Lambda Function Initialization](#lambda-function-initialization)
         - [Logging](#logging)
@@ -64,14 +66,38 @@ This project follows the [src project structure](https://docs.microsoft.com/en-u
 ## Design
 ![AMI ID Version Update Conceptual Design](./docs/ami-version-change-monitoring-conceptual.png)
 
-The solution has been split into to components. The first is one that monitors the selected Elastic Beanstalk platform for changes to the AMI associated with it and ensure that a Systems Manager Parameter Store parameter is kept up to date.
+The solution has been split into two components. The first is one monitors the selected Elastic Beanstalk platform for changes to the AMI associated with it and ensure that a Systems Manager Parameter Store parameter is kept up to date.
 
 ![Image Builder Pipeline Conceptual Design](./docs/start-new-image-builder-pipeline-execution-conceptual.png)
 
 The next component picks up where that Systems Manager Parameter Store parameter left off and will update the associated EC2 Image Builder Pipeline's recipe with the updated AMI ID, and will trigger the execution of the pipeline so that a new AMI is created.
 
+![Image Builder Pipeline](./docs/image-builder-pipeline.png)
+The build stage of the EC2 Image Builder pipeline included in this project follows the steps depicted above. A custom [Image Builder Component](https://docs.aws.amazon.com/imagebuilder/latest/userguide/image-builder-application-documents.html) is also included that update the SSM Agent prior to installing Windows Updates, and executing the [EC2 Image Builder STIG Medium Component](https://docs.aws.amazon.com/imagebuilder/latest/userguide/image-builder-stig.html).
+
+Let's take a closer look at the classes that make up the Lambda functions.
+
 ### Static Relationships
-![Image Builder Pipeline Conceptual Design](./docs/class-diagram.png)
+All of the Lambda functions are contained within a single Visual Studio project (BeanstalkImageBuilderPipeline). See the [Best practices for organizing larger serverless applications](https://aws.amazon.com/blogs/compute/best-practices-for-organizing-larger-serverless-applications/) blog post for other options on organizing your functions.
+
+This results in a single Docker image being used for both functions with the Lambda's entry point selecting the appropriate function to call at runtime. For instance, the below excerpt from the serverless.template used to invoke the AmiMonitor function.
+
+``` yaml
+ImageConfig:
+  Command:
+  - BeanstalkImageBuilderPipeline::BeanstalkImageBuilderPipeline.AmiMonitor::Handler
+```
+
+#### Namespaces
+![Namespaces](./docs/namespaces.png)
+
+There are three major namespaces that make up the solution
+* BeanstalkImageBuilderPipeline - Contains the Lambda functions
+* BeanstalkImageBuilderPipeline.Repositories - Contains the [repository classes](https://martinfowler.com/eaaCatalog/repository.html) used to abstract access to AWS services.
+* BeanstalkImageBuilderPipeline.Events - Contains classes representing event payloads not already provided by the AWS SDK.
+
+#### Classes
+![Image Builder Pipeline Major Classes](./docs/class-diagram.png)
 
 The base class for all Lambda functions is named LambdaFunction and provides functionality such as lazy initialization of an IServiceProvider that can be used for Dependency Injection, as well as the ConfigureServices template method used to allow subclasses to register their own dependencies.
 
@@ -85,12 +111,12 @@ At the start of the Lambda execution environment, the LambdaFunction class takes
 
 The LambdaFunction class does this by calling the GetServiceProvider method which in turn creates an instance of [.NET's Generic Host](https://docs.microsoft.com/en-us/dotnet/core/extensions/generic-host). The Generic Host is used because it configures:
 
-* Logging
-* Dependency Injection
-* Configuration
+* Logging (using Serilog)
+* Dependency Injection (using .NET's Service Provider)
+* Configuration (using .NET's Configurationg Provider)
 
 ##### Logging
-[Serilog](https://serilog.net) is used to provide Structured Logging, and include the [AWS Request Id](https://docs.aws.amazon.com/lambda/latest/dg/csharp-context.html) in each log entry.
+[Serilog](https://serilog.net) is used to provide Structured Logging, and .NET's support for [log scopes](https://docs.microsoft.com/en-us/dotnet/core/extensions/logging?tabs=command-line#log-scopes) is used to add metadata to each log entry (e.g., [AWS Request Id](https://docs.aws.amazon.com/lambda/latest/dg/csharp-context.html)).
 
 ##### Dependency Injection
 Once the Generic Host has initialized the Service Collection, the ConfigureServices [template method](https://en.wikipedia.org/wiki/Template_method_pattern) is called so that LambdaFunction's subclasses may register their dependencies.
@@ -98,7 +124,7 @@ Once the Generic Host has initialized the Service Collection, the ConfigureServi
 #### AMI Version Change Monitoring
 ![AMI ID Version Update Sequence Diagram](./docs/ami-version-change-monitoring.png)
 
-The AmiMonitor Lambda function is executed on a schedule. AmiMonitor retrieves the latest AMI version for the Beanstalk platform specified in the PLATFORM_ARN [environment variable](#environment-variables) using the [DescribePlatformVersion](https://docs.aws.amazon.com/elasticbeanstalk/latest/api/API_DescribePlatformVersion.html) API call.
+The AmiMonitor Lambda function is executed on a schedule by using an [EventBridge scheduled rule](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-create-rule-schedule.html). AmiMonitor retrieves the latest AMI version for the Beanstalk platform specified in the PLATFORM_ARN [environment variable](#environment-variables) using the [DescribePlatformVersion](https://docs.aws.amazon.com/elasticbeanstalk/latest/api/API_DescribePlatformVersion.html) API call.
 
 If the AMI ID returned is different than the value of the Systems Manager Parameter Store parameter specified in the SSM_PARAMETER_NAME [environment variable](#environment-variables), the parameter is updated.
 
@@ -106,7 +132,10 @@ This parameter update kicks off the second half of the process (i.e. starting th
 
 #### EC2 Image Builder Pipeline Execution
 ![Image Builder Pipeline Sequence Diagram](./docs/start-new-image-builder-pipeline-execution.png)
+The ImageBuilderTrigger Lambda function is invoked using an [EventBridge rule](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-create-rule.html) triggered when a ["Parameter Store Change" event](https://docs.aws.amazon.com/systems-manager/latest/userguide/sysman-paramstore-cwe.html) is raised for either the "Update" or "Create" operations.
 
+Once triggered, the Lambda function retrieves the parameter's value (i.e. the new AMI ID) from Parameter Store, and creates a new version the Image Builder Recipe associated with the Image Builder Pipeline referenced in the IMAGE_PIPELINE_ARN [environment variable](#environment-variables). 
+
+With the new recipe referencing the latest AMI ID, a new execution of the pipeline is started, creating a new golden image.
 ## Security
 See [CONTRIBUTING](CONTRIBUTING.md#security-issue-notifications) for more information.
-
