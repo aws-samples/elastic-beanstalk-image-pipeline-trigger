@@ -1,11 +1,11 @@
 # Elastic Beanstalk EC2 Image Builder Pipeline for Windows Automation
 
-Repository for project whose aim is to provide the ability for customers to detect when an Elastic Beanstalk platform's AMI is updated and kickoff an EC2 Image Builder Pipeline to automate the creation of a golden image.
+This project provides the ability to detect when an Elastic Beanstalk platform's base AMI has been updated and starts an EC2 Image Builder Pipeline to automate the creation of a golden image.
 
 ## License
 This library is licensed under the MIT-0 License. See the [LICENSE](LICENSE.TXT) file.
 
-Additionally, this project installs the following software for the purposes of deploying and running the labs into the lab environment:
+Additionally, this project installs the following software for the purposes of deploying and running the application:
 
 * [Microsoft .NET](https://github.com/dotnet/runtime) is an open source developer platform, created by Microsoft is provided under the MIT License.
 * [Serilog](https://github.com/serilog/serilog) is an open source software diagnostic logging library for .NET applications provided under the Apache 2 License.
@@ -37,10 +37,10 @@ Additionally, this project installs the following software for the purposes of d
 
 This project provides a sample solution to automate the execution of an EC2 Image Builder Pipeline that uses an Amazon Elastic Beanstalk managed AMI as the source AMI. There are currently two parts to the solution, each a Lambda function:
 
-* **AmiMonitor** - Determine when the Amazon Elastic Beanstalk managed AMI has been updated for a platform
-* **ImageBuilderTrigger** - Start the execution of an Amazon EC2 Image Builder pipeline when Elastic Beanstalk managed AMI is updated
+* **AmiMonitor** - Determines when the Amazon Elastic Beanstalk managed AMI has been updated for a platform. This function is invoked on a schedule.
+* **ImageBuilderTrigger** - Starts the execution of an Amazon EC2 Image Builder pipeline when the Parameter Store parameter referencing the Elastic Beanstalk managed AMI is updated
 
-Both these Lambda functions are contained in the same .NET assembly.
+Both of these Lambda functions are contained in the same .NET assembly.
 
 ## Project Structure
 
@@ -66,21 +66,21 @@ This project follows the [src project structure](https://docs.microsoft.com/en-u
 ## Design
 ![AMI ID Version Update Conceptual Design](./docs/ami-version-change-monitoring-conceptual.png)
 
-The solution has been split into two components. The first is one monitors the selected Elastic Beanstalk platform for changes to the AMI associated with it and ensure that a Systems Manager Parameter Store parameter is kept up to date.
+The solution has been split into two components. The first is one monitors the selected Elastic Beanstalk platform for changes to the AMI associated with it and ensures that a Systems Manager Parameter Store parameter is kept up to date.
 
 ![Image Builder Pipeline Conceptual Design](./docs/start-new-image-builder-pipeline-execution-conceptual.png)
 
 The next component picks up where that Systems Manager Parameter Store parameter left off and will update the associated EC2 Image Builder Pipeline's recipe with the updated AMI ID, and will trigger the execution of the pipeline so that a new AMI is created.
 
 ![Image Builder Pipeline](./docs/image-builder-pipeline.png)
-The build stage of the EC2 Image Builder pipeline included in this project follows the steps depicted above. A custom [Image Builder Component](https://docs.aws.amazon.com/imagebuilder/latest/userguide/image-builder-application-documents.html) is also included that update the SSM Agent prior to installing Windows Updates, and executing the [EC2 Image Builder STIG Medium Component](https://docs.aws.amazon.com/imagebuilder/latest/userguide/image-builder-stig.html).
+The build stage of the EC2 Image Builder pipeline included in this project follows the steps depicted above. A custom [Image Builder Component](https://docs.aws.amazon.com/imagebuilder/latest/userguide/image-builder-application-documents.html) is also included that updates the SSM Agent prior to installing Windows Updates, and executing the [EC2 Image Builder STIG Medium Component](https://docs.aws.amazon.com/imagebuilder/latest/userguide/image-builder-stig.html) to harden the AMI.
 
 Let's take a closer look at the classes that make up the Lambda functions.
 
 ### Static Relationships
 All of the Lambda functions are contained within a single Visual Studio project (BeanstalkImageBuilderPipeline). See the [Best practices for organizing larger serverless applications](https://aws.amazon.com/blogs/compute/best-practices-for-organizing-larger-serverless-applications/) blog post for other options on organizing your functions.
 
-This results in a single Docker image being used for both functions with the Lambda's entry point selecting the appropriate function to call at runtime. For instance, the below excerpt from the serverless.template used to invoke the AmiMonitor function.
+This results in a single Docker image being used for both functions with the Lambda's entry point (specified by the [Command property of ImageConfig](https://docs.aws.amazon.com/lambda/latest/dg/API_ImageConfig.html)) selecting the appropriate function to call at runtime. For instance, the below excerpt from the serverless.template is used to invoke the AmiMonitor function.
 
 ``` yaml
 ImageConfig:
