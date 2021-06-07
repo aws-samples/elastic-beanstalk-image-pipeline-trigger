@@ -54,6 +54,17 @@ This project follows the [src project structure](https://docs.microsoft.com/en-u
 │  └─ ...
 ```
 ## Running the Code
+The code was developed using .NET 5. Because .NET 5 is not a LTSC release, [AWS Lambda's support for container images](https://aws.amazon.com/blogs/developer/net-5-aws-lambda-support-with-container-images/) was used. Once you have cloned the repository, you can execute the following command _from the project's root folder_ to run the unit tests included with the project to ensure all dependencies have been downloaded.
+
+```shell
+dotnet test
+```
+
+The output should be similar to the following, showing the results of the unit tests that were executed.
+
+![Unit Test Results](./docs/unit-test-results.png)
+
+Visual Studio is recommended for local development as it can ease the deployment of the of the SAM template.
 
 ### Environment Variables
 
