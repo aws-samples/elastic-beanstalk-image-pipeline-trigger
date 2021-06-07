@@ -127,7 +127,15 @@ The LambdaFunction class does this by calling the GetServiceProvider method whic
 * Configuration (using .NET's Configurationg Provider)
 
 ##### Logging
-[Serilog](https://serilog.net) is used to provide Structured Logging, and .NET's support for [log scopes](https://docs.microsoft.com/en-us/dotnet/core/extensions/logging?tabs=command-line#log-scopes) is used to add metadata to each log entry (e.g., [AWS Request Id](https://docs.aws.amazon.com/lambda/latest/dg/csharp-context.html)).
+[Serilog](https://serilog.net) is used to provide Structured Logging, and .NET's support for [log scopes](https://docs.microsoft.com/en-us/dotnet/core/extensions/logging?tabs=command-line#log-scopes) is used to add metadata to each log entry (e.g., [AWS Request Id](https://docs.aws.amazon.com/lambda/latest/dg/csharp-context.html)). This additional metadata can be seen in log entries created by the application or its dependencies. For example, the below are from CloudWatch:
+
+This is a log entry created by the application.
+
+![Application Log Entry](./docs/app-log-entry.png)
+
+This is a log entry created by AWS SDK for .NET. Notice that the Scope property has the same AwsRequestId value for both log entries.
+
+![Log Entry Created By AWS SDK](./docs/aws-sdk-log-entry.png)
 
 ##### Dependency Injection
 Once the Generic Host has initialized the Service Collection, the ConfigureServices [template method](https://en.wikipedia.org/wiki/Template_method_pattern) is called so that LambdaFunction's subclasses may register their dependencies.
