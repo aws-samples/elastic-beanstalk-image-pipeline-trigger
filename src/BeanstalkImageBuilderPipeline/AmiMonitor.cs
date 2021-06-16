@@ -1,4 +1,4 @@
-// This sample, non-production-ready project that provides provides the ability to detect when an Amazon Elastic Beanstalk 
+// This sample, non-production-ready project that demonstrates how to detect when an Amazon Elastic Beanstalk 
 // platform's base AMI has been updated and starts an EC2 Image Builder Pipeline to automate the creation of a golden image.
 // © 2021 Amazon Web Services, Inc. or its affiliates. All Rights Reserved.  
 // This AWS Content is provided subject to the terms of the AWS Customer Agreement available at  
