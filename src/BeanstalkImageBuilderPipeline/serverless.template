@@ -224,10 +224,11 @@ Resources:
             DeadLetterConfig:
               Arn: !GetAtt AmiMonitorDlq.Arn
             Pattern:
-                source: [ "aws.ssm" ]
-                detail-type: [ "Parameter Store Change" ]
+              detail-type: [ "Parameter Store Change" ]
+              source: [ "aws.ssm" ]
+              resources: [ !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${LatestBeanstalkAmiIdParameter}" ]
+              detail:
                 operation: [ "Create", "Update" ]
-                resources: [ !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${LatestBeanstalkAmiIdParameter}" ]
       DeadLetterQueue:
         Type: SQS
         TargetArn: !GetAtt ImageBuilderTriggerDlq.Arn
