@@ -105,6 +105,14 @@ Resources:
       KmsMasterKeyId: alias/aws/sqs
   AmiMonitor:
     Type: AWS::Serverless::Function
+    Metadata:
+      Dockerfile: Dockerfile
+      DockerContext: "."
+      DockerTag: "latest"
+      cfn_nag:
+        rules_to_suppress:
+        - id: W89
+          reason: 'Lambda function is not accessing any resources provisioned in a VPC.'
     Properties:
       FunctionName: BeanstalkManagedAmiMonitor
       PackageType: Image
@@ -146,16 +154,22 @@ Resources:
       DeadLetterQueue:
         Type: SQS
         TargetArn: !GetAtt AmiMonitorDlq.Arn
-    Metadata:
-      Dockerfile: Dockerfile
-      DockerContext: "."
-      DockerTag: "latest"
   ImageBuilderTriggerDlq:
     Type: AWS::SQS::Queue
     Properties:
       KmsMasterKeyId: alias/aws/sqs
   ImageBuilderTrigger:
     Type: AWS::Serverless::Function
+    Metadata:
+      Dockerfile: Dockerfile
+      DockerContext: "."
+      DockerTag: "latest"
+      cfn_nag:
+        rules_to_suppress:
+        - id: W11
+          reason: '* only applies to actions in statements which need access to images that are created by pipeline'
+        - id: W89
+          reason: 'Lambda function is not accessing any resources provisioned in a VPC.'
     Properties:
       FunctionName: ImageBuilderTrigger
       PackageType: Image
@@ -203,12 +217,16 @@ Resources:
           - imagebuilder:GetImagePipeline
           - imagebuilder:UpdateImagePipeline
           Resource: !Ref WindowsBeanstalkImagePipeline
-        - Sid: AllowGetConfiguration
+        - Sid: AllowGetInfraConfiguration
           Effect: Allow
           Action: 
           - imagebuilder:GetInfrastructureConfiguration
+          Resource: !Ref InfrastructureConfiguration
+        - Sid: AllowGetDistroConfiguration
+          Effect: Allow
+          Action: 
           - imagebuilder:GetDistributionConfiguration
-          Resource: '*'
+          Resource: !Ref GoldenImageDistributionConfiguration
         - Sid: AllowCreateServiceLinkedRole
           Effect: Allow
           Action: iam:CreateServiceLinkedRole
@@ -232,10 +250,6 @@ Resources:
       DeadLetterQueue:
         Type: SQS
         TargetArn: !GetAtt ImageBuilderTriggerDlq.Arn
-    Metadata:
-      Dockerfile: Dockerfile
-      DockerContext: "."
-      DockerTag: "latest"
   LatestBeanstalkAmiIdParameter:
     Type: AWS::SSM::Parameter
     Properties:
