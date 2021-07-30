@@ -1,6 +1,6 @@
 # Elastic Beanstalk EC2 Image Builder Pipeline for Windows Automation
 
-This project demonstrates how to detect when an Elastic Beanstalk platform's base AMI has been updated and starts an EC2 Image Builder Pipeline to automate the creation of a golden image.
+This project demonstrates how to detect when an Elastic Beanstalk platform's base AMI has been updated and starts an EC2 Image Builder Pipeline to automate the creation of a golden image and is the companion to the [EC2 Image Builder and Hands-free Hardening of Windows Images for AWS Elastic Beanstalk](https://aws.amazon.com/blogs/devops/ec2-image-builder-for-windows-on-aws-elastic-beanstalk/) blog post.
 
 ## License
 This library is licensed under the MIT-0 License. See the [LICENSE](LICENSE.TXT) file.
